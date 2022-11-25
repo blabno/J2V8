@@ -39,19 +39,57 @@ echo "export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk1.8.0_131.jdk/Conten
 echo "export PATH=/opt/apache-maven-3.5.0/bin:$PATH" >> /Users/vagrant/.bash_profile
 SCRIPT
 
-fs_type = ENV['VAGRANT_FILE_SHARE_TYPE'] || "nfs"
+$provision_v8_build_tools = <<SCRIPT
+echo Setting up v8 build tools...
+git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+echo "export PATH=/Users/vagrant/depot_tools:$PATH" >> /Users/vagrant/.bash_profile
+echo "export PATH=/Users/vagrant/depot_tools:$PATH" >> /Users/vagrant/.zshrc
+SCRIPT
+
+$provision_v8 = <<SCRIPT
+echo Checking out v8...
+gclient
+mkdir -p ~/v8
+cd ~/v8
+fetch v8
+cd v8
+git checkout 9.3.345.11
+gclient sync
+./tools/dev/v8gen.py x64.release
+sed -i -e $'s/#include <atomic>/#include <utility>\\\n#include <atomic>/' include/cppgc/allocation.h
+echo "target_cpu = \\"x64\\"
+is_component_build = false
+is_debug = false
+use_custom_libcxx = false
+v8_monolithic = true
+v8_enable_pointer_compression = false
+v8_use_external_startup_data = false" > out.gn/x64.release/args.gn
+vi out.gn/x64.release/args.gn +$'i\n' +w +q
+ninja -C out.gn/x64.release v8_monolith
+mkdir -p ../../j2v8/v8.out
+cp out.gn/x64.release/obj/libv8_monolith.a ../../j2v8/v8.out/
+cp -R include ../../j2v8/v8.out/
+SCRIPT
+
+$provision_v8_dep_dir = <<SCRIPT
+echo Create /usr/local/lib directory...
+mkdir -p /usr/local/lib
+SCRIPT
+
+#fs_type = ENV['VAGRANT_FILE_SHARE_TYPE'] || "virtualbox" || "nfs"
+fs_type = "rsync"
 
 Vagrant.configure(2) do |config|
 
     config.vm.box = ENV['VAGRANT_SYS_IMAGE'] || "http://files.dryga.com/boxes/osx-sierra-0.3.1.box"
     config.vm.hostname = "j2v8.macos.x64"
-    
+    config.vm.boot_timeout = 600
     config.vm.provider "virtualbox" do |v|
         v.name = "j2v8.macos.x64"
-        v.memory = 2048
+        v.memory = 12048
         v.cpus = 4
     end
-    
+
     config.vm.synced_folder ".", "/vagrant", type: fs_type
     config.vm.synced_folder "../../", "/Users/vagrant/j2v8", type: fs_type, smb_username: ENV['VAGRANT_SMB_USER'], smb_password: ENV['VAGRANT_SMB_PASSWORD']
 
@@ -59,5 +97,8 @@ Vagrant.configure(2) do |config|
     config.vm.provision "shell", inline: $provision_java
     config.vm.provision "shell", inline: $provision_cmake
     config.vm.provision "shell", inline: $provision_maven
-    config.vm.provision "shell", inline: $provision_env
+    config.vm.provision "shell", inline: $provision_env, privileged: false
+    config.vm.provision "shell", inline: $provision_v8_build_tools, privileged: false
+    config.vm.provision "shell", inline: $provision_v8_dep_dir
+    config.vm.provision "shell", inline: $provision_v8, privileged: false
 end
